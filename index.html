@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台指選擇權買方損益計算器 (TXO)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; }
+        .result { transition: all 0.3s; }
+    </style>
+</head>
+<body class="bg-gray-50 py-8">
+    <div class="max-w-4xl mx-auto px-4">
+        <div class="bg-white rounded-2xl shadow-xl p-8">
+            <h1 class="text-3xl font-bold text-center text-blue-600 mb-2">台指選擇權買方損益計算器</h1>
+            <p class="text-center text-gray-600 mb-8">月選擇權 × 週選擇權 一鍵對比（契約乘數 NT$50）</p>
+
+            <!-- 輸入區 -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div>
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2">買 Call / 買 Put</label>
+                        <div class="flex gap-4">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="type" value="c" checked class="w-5 h-5 accent-blue-600">
+                                <span class="text-lg">買 Call</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="type" value="p" class="w-5 h-5 accent-blue-600">
+                                <span class="text-lg">買 Put</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="space-y-6">
+                        <div>
+                            <label class="block text-sm font-medium mb-1">履約價 (點)</label>
+                            <input id="strike" type="number" value="23000" class="w-full px-4 py-3 border rounded-xl text-2xl font-semibold focus:outline-none focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-1">月選擇權成交價 (點)</label>
+                            <input id="prem_month" type="number" value="185" step="0.1" class="w-full px-4 py-3 border rounded-xl text-2xl font-semibold focus:outline-none focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-1">週選擇權成交價 (點)</label>
+                            <input id="prem_week" type="number" value="68" step="0.1" class="w-full px-4 py-3 border rounded-xl text-2xl font-semibold focus:outline-none focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-1">交易口數</label>
+                            <input id="lots" type="number" value="1" min="1" class="w-full px-4 py-3 border rounded-xl text-2xl font-semibold focus:outline-none focus:border-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 結果區 -->
+                <div class="bg-gray-50 rounded-2xl p-6 result">
+                    <h3 class="font-semibold text-lg mb-4 text-gray-700">計算結果</h3>
+                    <div id="results" class="space-y-4 text-lg"></div>
+                </div>
+            </div>
+
+            <!-- 結算指數輸入 -->
+            <div class="mt-10 border-t pt-8">
+                <label class="block text-sm font-medium mb-2">輸入到期結算指數 (點)</label>
+                <div class="flex gap-3">
+                    <input id="settlement" type="number" value="23250" class="flex-1 px-6 py-4 border-2 border-blue-200 rounded-2xl text-3xl font-bold focus:outline-none focus:border-blue-500">
+                    <button onclick="calculatePL()" 
+                            class="px-10 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-2xl text-lg transition">
+                        計算損益
+                    </button>
+                </div>
+            </div>
+
+            <!-- 損益顯示 -->
+            <div id="pl_results" class="mt-6 grid grid-cols-2 gap-4"></div>
+
+            <!-- 損益曲線圖 -->
+            <div class="mt-10">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-semibold text-lg">損益曲線圖</h3>
+                    <button onclick="drawChart()" 
+                            class="text-sm px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-xl transition">
+                        重新繪製圖表
+                    </button>
+                </div>
+                <canvas id="profitChart" class="w-full"></canvas>
+            </div>
+        </div>
+
+        <p class="text-center text-xs text-gray-500 mt-8">Made with ❤️ for Taiwan Options Traders • GitHub Pages 版</p>
+    </div>
+
+    <script>
+        let chartInstance = null;
+
+        function updateBasicInfo() {
+            const type = document.querySelector('input[name="type"]:checked').value;
+            const strike = parseFloat(document.getElementById('strike').value) || 0;
+            const premM = parseFloat(document.getElementById('prem_month').value) || 0;
+            const premW = parseFloat(document.getElementById('prem_week').value) || 0;
+            const lots = parseFloat(document.getElementById('lots').value) || 1;
+            const mult = 50;
+
+            const costM = (premM * mult * lots).toLocaleString();
+            const costW = (premW * mult * lots).toLocaleString();
+            
+            const beM = type === 'c' ? (strike + premM).toFixed(2) : (strike - premM).toFixed(2);
+            const beW = type === 'c' ? (strike + premW).toFixed(2) : (strike - premW).toFixed(2);
+
+            let html = `
+                <div class="flex justify-between"><span class="text-gray-600">月選總成本</span><span class="font-semibold">${costM} 元</span></div>
+                <div class="flex justify-between"><span class="text-gray-600">週選總成本</span><span class="font-semibold">${costW} 元</span></div>
+                <div class="flex justify-between"><span class="text-gray-600">月選盈虧平衡點</span><span class="font-semibold">${beM} 點</span></div>
+                <div class="flex justify-between"><span class="text-gray-600">週選盈虧平衡點</span><span class="font-semibold">${beW} 點</span></div>
+            `;
+            document.getElementById('results').innerHTML = html;
+        }
+
+        function calculatePL() {
+            const type = document.querySelector('input[name="type"]:checked').value;
+            const strike = parseFloat(document.getElementById('strike').value) || 0;
+            const premM = parseFloat(document.getElementById('prem_month').value) || 0;
+            const premW = parseFloat(document.getElementById('prem_week').value) || 0;
+            const lots = parseFloat(document.getElementById('lots').value) || 1;
+            const settlement = parseFloat(document.getElementById('settlement').value) || 0;
+            const mult = 50;
+
+            const intrinsic = type === 'c' 
+                ? Math.max(settlement - strike, 0) 
+                : Math.max(strike - settlement, 0);
+
+            const plM = Math.round((intrinsic - premM) * mult * lots);
+            const plW = Math.round((intrinsic - premW) * mult * lots);
+
+            const costM = premM * mult * lots;
+            const costW = premW * mult * lots;
+
+            const roiM = costM ? (plM / costM * 100).toFixed(1) : 0;
+            const roiW = costW ? (plW / costW * 100).toFixed(1) : 0;
+
+            let html = `
+                <div class="bg-white border-2 ${plM >= 0 ? 'border-green-500' : 'border-red-500'} rounded-2xl p-5">
+                    <div class="text-sm text-gray-500">月選擇權</div>
+                    <div class="text-3xl font-bold mt-1 ${plM >= 0 ? 'text-green-600' : 'text-red-600'}">${plM.toLocaleString()} 元</div>
+                    <div class="text-sm mt-2">報酬率 <span class="${plM >= 0 ? 'text-green-600' : 'text-red-600'}">${roiM}%</span></div>
+                </div>
+                <div class="bg-white border-2 ${plW >= 0 ? 'border-green-500' : 'border-red-500'} rounded-2xl p-5">
+                    <div class="text-sm text-gray-500">週選擇權</div>
+                    <div class="text-3xl font-bold mt-1 ${plW >= 0 ? 'text-green-600' : 'text-red-600'}">${plW.toLocaleString()} 元</div>
+                    <div class="text-sm mt-2">報酬率 <span class="${plW >= 0 ? 'text-green-600' : 'text-red-600'}">${roiW}%</span></div>
+                </div>
+            `;
+            document.getElementById('pl_results').innerHTML = html;
+
+            drawChart();
+        }
+
+        function drawChart() {
+            const type = document.querySelector('input[name="type"]:checked').value;
+            const strike = parseFloat(document.getElementById('strike').value) || 23000;
+            const premM = parseFloat(document.getElementById('prem_month').value) || 185;
+            const premW = parseFloat(document.getElementById('prem_week').value) || 68;
+            const lots = parseFloat(document.getElementById('lots').value) || 1;
+            const mult = 50;
+
+            const start = Math.floor(strike - 800);
+            const prices = [];
+            const plMonth = [];
+            const plWeek = [];
+
+            for (let p = start; p <= strike + 800; p += 20) {
+                prices.push(p);
+                const intrinsic = type === 'c' ? Math.max(p - strike, 0) : Math.max(strike - p, 0);
+                plMonth.push(Math.round((intrinsic - premM) * mult * lots));
+                plWeek.push(Math.round((intrinsic - premW) * mult * lots));
+            }
+
+            const ctx = document.getElementById('profitChart');
+            
+            if (chartInstance) chartInstance.destroy();
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: prices,
+                    datasets: [
+                        {
+                            label: `月選擇權 (${premM}點)`,
+                            data: plMonth,
+                            borderColor: '#2563eb',
+                            backgroundColor: 'rgba(37,99,235,0.1)',
+                            tension: 0.3,
+                            borderWidth: 3
+                        },
+                        {
+                            label: `週選擇權 (${premW}點)`,
+                            data: plWeek,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239,68,68,0.1)',
+                            tension: 0.3,
+                            borderWidth: 3
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    scales: {
+                        y: {
+                            ticks: { callback: v => v.toLocaleString() + ' 元' }
+                        },
+                        x: { title: { display: true, text: '到期結算指數 (點)' } }
+                    }
+                }
+            });
+        }
+
+        // 即時更新
+        document.querySelectorAll('input').forEach(input => {
+            input.addEventListener('input', () => {
+                updateBasicInfo();
+            });
+        });
+
+        // 初始載入
+        window.onload = () => {
+            updateBasicInfo();
+            setTimeout(() => drawChart(), 500);
+        };
+    </script>
+</body>
+</html>
